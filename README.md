@@ -14,22 +14,31 @@ implementation.
 
 ## Running in Docker
 
+``` shell
+docker run -d --name ipmi-exporter \
+  -p 9290:9290 \
+  -e IPMIUSER="root" \
+  -e IPMIPASSWORD="YourPassword" \
+  darren00/ipmi-exporter
+```
+
+### Using Docker Compose
+
 `docker-compose.yml`:
 
 ``` yaml
 version: '3.5'
 services:
-  ipmi_exporter:
+  ipmi-exporter:
     image: darren00/ipmi-exporter
+    restart: always
     environment:
       IPMIUSER: "root"                      # default ipmi user
       IPMIPASSWORD: "YourPassword"          # default ipmi password
     volumes:
       - ./ipmi_remote.yml:/config.yml:ro    # replace with your own config
     ports:
-      - 9290:9290                           # bind on 0.0.0.0
-      # - 127.0.0.1:9290:9290               # or bind to specific interface
-    hostname: ipmi_exporter_docker
+      - 9290:9290
 ```
 
 ## Prometheus configuration example
