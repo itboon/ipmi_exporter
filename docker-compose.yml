@@ -1,8 +1,11 @@
-version: '3.7'
+version: '3.5'
 services:
   ipmi_exporter:
     build:
       context: .
+    environment:
+      IPMIUSER: "root"                      # default ipmi user
+      IPMIPASSWORD: "YourPassword"          # default ipmi password
     volumes:
       - ./ipmi_remote.yml:/config.yml:ro    # replace with your own config
     ports:
