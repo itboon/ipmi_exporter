@@ -6,7 +6,7 @@ ADD . /ipmi_exporter/
 RUN cd /ipmi_exporter && go build -o ipmi_exporter
 
 # Container image
-FROM debian:buster
+FROM debian:buster-slim
 
 WORKDIR /
 
