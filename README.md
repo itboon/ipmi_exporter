@@ -20,8 +20,7 @@ implementation.
 version: '3.5'
 services:
   ipmi_exporter:
-    build:
-      context: .
+    image: darren00/ipmi-exporter
     environment:
       IPMIUSER: "root"                      # default ipmi user
       IPMIPASSWORD: "YourPassword"          # default ipmi password
