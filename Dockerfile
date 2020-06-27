@@ -1,16 +1,22 @@
-# Build /go/bin/ipmi_exporter
-FROM quay.io/prometheus/golang-builder:1.13-base AS builder
-ADD . /go/src/github.com/soundcloud/ipmi_exporter/
-RUN cd /go/src/github.com/soundcloud/ipmi_exporter && make
+# Build image
+FROM golang:1.14 AS builder
+
+#ENV GOPROXY="http://mirrors.aliyun.com/goproxy/"
+ADD . /ipmi_exporter/
+RUN cd /ipmi_exporter && go build -o ipmi_exporter
 
 # Container image
-FROM ubuntu:18.04
+FROM debian:buster
+
 WORKDIR /
+
+#RUN echo "deb http://mirrors.aliyun.com/debian buster main" > /etc/apt/sources.list
+
 RUN apt-get update \
     && apt-get install freeipmi-tools -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /go/src/github.com/soundcloud/ipmi_exporter/ipmi_exporter /bin/ipmi_exporter
+COPY --from=builder /ipmi_exporter/ipmi_exporter /bin/ipmi_exporter
 
 EXPOSE 9290
 ENTRYPOINT ["/bin/ipmi_exporter"]
