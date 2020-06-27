@@ -207,9 +207,17 @@ func freeipmiConfig(config IPMIConfig) string {
 	}
 	if config.User != "" {
 		fmt.Fprintf(&b, "username %s\n", config.User)
+	} else {
+		if u := os.Getenv("IPMIUSER"); u != "" {
+			fmt.Fprintf(&b, "username %s\n", u)
+		}
 	}
 	if config.Password != "" {
 		fmt.Fprintf(&b, "password %s\n", escapePassword(config.Password))
+	} else {
+		if p := os.Getenv("IPMIPASSWORD"); p != "" {
+			fmt.Fprintf(&b, "password %s\n", escapePassword(p))
+		}
 	}
 	if config.Timeout != 0 {
 		fmt.Fprintf(&b, "session-timeout %d\n", config.Timeout)
@@ -272,7 +280,14 @@ func freeipmiOutput(cmd string, target ipmiTarget, arg ...string) ([]byte, error
 }
 
 func ipmiMonitoringOutput(target ipmiTarget) ([]byte, error) {
-	return freeipmiOutput("ipmimonitoring", target, "-Q", "--ignore-unrecognized-events", "--comma-separated-output", "--no-header-output", "--sdr-cache-recreate")
+	return freeipmiOutput("ipmi-sensors", target,
+		"--quiet-cache",
+		"--ignore-unrecognized-events",
+		"--ignore-not-available-sensors",
+		"--comma-separated-output",
+		"--no-header-output",
+		"--output-sensor-state",
+		"--sdr-cache-recreate")
 }
 
 func ipmiDCMIOutput(target ipmiTarget) ([]byte, error) {
