@@ -1,5 +1,5 @@
 # Build image
-FROM golang:1.14 AS builder
+FROM golang:1.15 AS builder
 
 #ENV GOPROXY="http://mirrors.aliyun.com/goproxy/"
 ADD . /ipmi_exporter/

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -27,12 +28,13 @@ const (
 )
 
 var (
-	ipmiDCMICurrentPowerRegex    = regexp.MustCompile(`^Current Power\s*:\s*(?P<value>[0-9.]*)\s*Watts.*`)
-	ipmiChassisPowerRegex        = regexp.MustCompile(`^System Power\s*:\s(?P<value>.*)`)
-	ipmiSELEntriesRegex          = regexp.MustCompile(`^Number of log entries\s*:\s(?P<value>[0-9.]*)`)
-	ipmiSELFreeSpaceRegex        = regexp.MustCompile(`^Free space remaining\s*:\s(?P<value>[0-9.]*)\s*bytes.*`)
-	bmcInfoFirmwareRevisionRegex = regexp.MustCompile(`^Firmware Revision\s*:\s*(?P<value>[0-9.]*).*`)
-	bmcInfoManufacturerIDRegex   = regexp.MustCompile(`^Manufacturer ID\s*:\s*(?P<value>.*)`)
+	ipmiDCMICurrentPowerRegex         = regexp.MustCompile(`^Current Power\s*:\s*(?P<value>[0-9.]*)\s*Watts.*`)
+	ipmiChassisPowerRegex             = regexp.MustCompile(`^System Power\s*:\s(?P<value>.*)`)
+	ipmiSELEntriesRegex               = regexp.MustCompile(`^Number of log entries\s*:\s(?P<value>[0-9.]*)`)
+	ipmiSELFreeSpaceRegex             = regexp.MustCompile(`^Free space remaining\s*:\s(?P<value>[0-9.]*)\s*bytes.*`)
+	bmcInfoFirmwareRevisionRegex      = regexp.MustCompile(`^Firmware Revision\s*:\s*(?P<value>[0-9.]*).*`)
+	bmcInfoSystemFirmwareVersionRegex = regexp.MustCompile(`^System Firmware Version\s*:\s*(?P<value>[0-9.]*).*`)
+	bmcInfoManufacturerIDRegex        = regexp.MustCompile(`^Manufacturer ID\s*:\s*(?P<value>.*)`)
 )
 
 type collector struct {
@@ -158,7 +160,7 @@ var (
 	bmcInfo = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "bmc", "info"),
 		"Constant metric with value '1' providing details about the BMC.",
-		[]string{"firmware_revision", "manufacturer_id"},
+		[]string{"firmware_revision", "manufacturer_id", "system_firmware_version"},
 		nil,
 	)
 
@@ -186,6 +188,13 @@ var (
 	durationDesc = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "scrape_duration", "seconds"),
 		"Returns how long the scrape took to complete in seconds.",
+		nil,
+		nil,
+	)
+
+	lanModeDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "config", "lan_mode"),
+		"Returns configured LAN mode (0=dedicated, 1=shared, 2=failover).",
 		nil,
 		nil,
 	)
@@ -274,7 +283,7 @@ func freeipmiOutput(cmd string, target ipmiTarget, arg ...string) ([]byte, error
 	log.Debugf("Executing %s %v", fqcmd, args)
 	out, err := exec.Command(fqcmd, args...).CombinedOutput()
 	if err != nil {
-		log.Errorf("Error while calling %s for %s: %s", cmd, targetName(target.host), out)
+		log.Warnf("Error while calling %s for %s: %s", cmd, targetName(target.host), out)
 	}
 	return out, err
 }
@@ -295,7 +304,7 @@ func ipmiDCMIOutput(target ipmiTarget) ([]byte, error) {
 }
 
 func bmcInfoOutput(target ipmiTarget) ([]byte, error) {
-	return freeipmiOutput("bmc-info", target, "--get-device-id")
+	return freeipmiOutput("bmc-info", target)
 }
 
 func ipmiChassisOutput(target ipmiTarget) ([]byte, error) {
@@ -391,6 +400,10 @@ func getBMCInfoManufacturerID(ipmiOutput []byte) (string, error) {
 	return getValue(ipmiOutput, bmcInfoManufacturerIDRegex)
 }
 
+func getBMCInfoSystemFirmwareVersion(ipmiOutput []byte) (string, error) {
+	return getValue(ipmiOutput, bmcInfoSystemFirmwareVersionRegex)
+}
+
 func getSELInfoEntriesCount(ipmiOutput []byte) (float64, error) {
 	value, err := getValue(ipmiOutput, ipmiSELEntriesRegex)
 	if err != nil {
@@ -419,6 +432,7 @@ func (c collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- selFreeSpaceDesc
 	ch <- upDesc
 	ch <- durationDesc
+	ch <- lanModeDesc
 }
 
 func collectTypedSensor(ch chan<- prometheus.Metric, desc, stateDesc *prometheus.Desc, state float64, data sensorData) {
@@ -506,10 +520,41 @@ func collectMonitoring(ch chan<- prometheus.Metric, target ipmiTarget) (int, err
 	return 1, nil
 }
 
+func collectSmLanMode(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
+	output, err := freeipmiOutput("ipmi-raw", target, "0x0", "0x30", "0x70", "0x0c", "0")
+	if err != nil {
+		log.Errorf("Failed to collect sm-lan-mode data from %s: %s", targetName(target.host), err)
+		return 0, err
+	}
+
+	strOutput := strings.Trim(string(output), " \r\n")
+	if !strings.HasPrefix(strOutput, "rcvd: ") {
+		log.Errorf("Unexpected output of ipmi-raw from %s: %s", targetName(target.host), strOutput)
+		return 0, errors.New("unexpected output")
+	}
+
+	octects := strings.Split(strOutput[6:], " ")
+	if len(octects) != 3 {
+		log.Errorf("Unexpected number of octects of ipmi-raw from %s: %+v", targetName(target.host), octects)
+		return 0, errors.New("unexpected number of octects")
+	}
+
+	switch octects[2] {
+	case "00", "01", "02":
+		value, _ := strconv.Atoi(octects[2])
+		ch <- prometheus.MustNewConstMetric(lanModeDesc, prometheus.GaugeValue, float64(value))
+	default:
+		log.Errorf("Unexpected lan mode status (ipmi-raw) from %s: %+v", targetName(target.host), octects[2])
+		return 0, errors.New("unexpected lan mode status")
+	}
+
+	return 1, nil
+}
+
 func collectDCMI(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
 	output, err := ipmiDCMIOutput(target)
 	if err != nil {
-		log.Debugf("Failed to collect ipmi-dcmi data from %s: %s", targetName(target.host), err)
+		log.Errorf("Failed to collect ipmi-dcmi data from %s: %s", targetName(target.host), err)
 		return 0, err
 	}
 	currentPowerConsumption, err := getCurrentPowerConsumption(output)
@@ -528,7 +573,7 @@ func collectDCMI(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
 func collectChassisState(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
 	output, err := ipmiChassisOutput(target)
 	if err != nil {
-		log.Debugf("Failed to collect ipmi-chassis data from %s: %s", targetName(target.host), err)
+		log.Errorf("Failed to collect ipmi-chassis data from %s: %s", targetName(target.host), err)
 		return 0, err
 	}
 	currentChassisPowerState, err := getChassisPowerState(output)
@@ -545,13 +590,21 @@ func collectChassisState(ch chan<- prometheus.Metric, target ipmiTarget) (int, e
 }
 
 func collectBmcInfo(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
-	output, err := bmcInfoOutput(target)
-	if err != nil {
-		log.Debugf("Failed to collect bmc-info data from %s: %s", targetName(target.host), err)
-		return 0, err
-	}
+	output, cmderr := bmcInfoOutput(target)
+	// Workaround for an issue described here: https://github.com/soundcloud/ipmi_exporter/issues/57
+	// The command may fail, but produce usable output (minus the system firmware revision).
+	// Try to recover gracefully from that situation by first trying to parse the output, and only
+	// raise the initial error if that also fails.
+
 	firmwareRevision, err := getBMCInfoFirmwareRevision(output)
 	if err != nil {
+		// If the command failed, return that error now, we tried to recover but to no avail.
+		if cmderr != nil {
+			log.Errorf("Failed to collect bmc-info data from %s: %s", targetName(target.host), cmderr)
+			return 0, cmderr
+		}
+
+		// Handling of successful command but failed parsing.
 		log.Errorf("Failed to parse bmc-info data from %s: %s", targetName(target.host), err)
 		return 0, err
 	}
@@ -560,11 +613,17 @@ func collectBmcInfo(ch chan<- prometheus.Metric, target ipmiTarget) (int, error)
 		log.Errorf("Failed to parse bmc-info data from %s: %s", targetName(target.host), err)
 		return 0, err
 	}
+	systemFirmwareVersion, err := getBMCInfoSystemFirmwareVersion(output)
+	if err != nil {
+		// This one is not always available.
+		log.Debugf("Failed to parse bmc-info data from %s: %s", targetName(target.host), err)
+		systemFirmwareVersion = "N/A"
+	}
 	ch <- prometheus.MustNewConstMetric(
 		bmcInfo,
 		prometheus.GaugeValue,
 		1,
-		firmwareRevision, manufacturerID,
+		firmwareRevision, manufacturerID, systemFirmwareVersion,
 	)
 	return 1, nil
 }
@@ -572,7 +631,7 @@ func collectBmcInfo(ch chan<- prometheus.Metric, target ipmiTarget) (int, error)
 func collectSELInfo(ch chan<- prometheus.Metric, target ipmiTarget) (int, error) {
 	output, err := ipmiSELOutput(target)
 	if err != nil {
-		log.Debugf("Failed to collect ipmi-sel data from %s: %s", targetName(target.host), err)
+		log.Errorf("Failed to collect ipmi-sel data from %s: %s", targetName(target.host), err)
 		return 0, err
 	}
 	entriesCount, err := getSELInfoEntriesCount(output)
@@ -632,6 +691,8 @@ func (c collector) Collect(ch chan<- prometheus.Metric) {
 		switch collector {
 		case "ipmi":
 			up, _ = collectMonitoring(ch, target)
+		case "sm-lan-mode":
+			up, _ = collectSmLanMode(ch, target)
 		case "dcmi":
 			up, _ = collectDCMI(ch, target)
 		case "bmc":
