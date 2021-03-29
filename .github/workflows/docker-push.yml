@@ -5,7 +5,8 @@ on:
     branches:
       - master
     tags:
-      - v*
+      - 'v*'
+  pull_request:
 
 jobs:
   docker:
@@ -20,6 +21,9 @@ jobs:
         uses: crazy-max/ghaction-docker-meta@v1
         with:
           images: name/app
+          tag-semver: |
+            {{version}}
+            {{major}}.{{minor}}
       -
         name: Set up QEMU
         uses: docker/setup-qemu-action@v1
@@ -35,7 +39,6 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       -
         name: Build and push
-        # https://github.com/crazy-max/ghaction-docker-meta
         uses: docker/build-push-action@v2
         with:
           context: .
